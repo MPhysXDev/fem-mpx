@@ -4,6 +4,7 @@
 // issues on https://gitlab.onelab.info/getdp/getdp/issues.
 
 #include <stdlib.h>
+#include <algorithm>
 #include "ProData.h"
 #include "GeoData.h"
 #include "DofData.h"
@@ -25,6 +26,25 @@ extern List_T *PreResolutionIndex_L;
 struct BasisFunction *BasisFunction_P;
 int Nbr_ElementaryBF, Flag_SubSpace;
 struct Group *GroupSupport_P, *GroupEntity_P;
+
+/* ------------------------------------------------------------------------ */
+/*  G r o w _ G r o u p s O f E n t i t i e s                               */
+/* ------------------------------------------------------------------------ */
+
+// Make room for (at least) n groups of entities in Element. The group arrays
+// are only ever grown (geometrically), so that after warm-up no allocation
+// takes place in the per-element hot paths.
+static void Grow_GroupsOfEntities(struct Element *Element, int n)
+{
+  if(n <= (int)Element->NumGroupsOfEntities.size()) return;
+  std::size_t m = std::max<std::size_t>(
+    std::max<std::size_t>(n, 2 * Element->NumGroupsOfEntities.size()), 16);
+  Element->NumGroupsOfEntities.resize(m);
+  Element->NbrEntitiesInGroups.resize(m);
+  Element->NumEntitiesInGroups.resize(m);
+  for(int k = 0; k < 3; k++) Element->NumSubFunction[k].resize(m);
+  Element->GlobalBasisFunction.resize(m);
+}
 
 /* ------------------------------------------------------------------------ */
 /*  G e t _ I n i t D o f O f E l e m e n t                                 */
@@ -148,8 +168,8 @@ void Get_DofOfElement(struct Element *Element,
           Element->GeoElement->NumNodes, BasisFunction_P);
         Get_CodesOfElement(
           FunctionSpace_P, QuantityStorage_P, Element->NbrGroupsOfEntities,
-          Element->NumGroupsOfEntities, StartingIndex, i_BFunction,
-          GROUPSOFNODESOF, Element->NumSubFunction[1]);
+          Element->NumGroupsOfEntities.data(), StartingIndex, i_BFunction,
+          GROUPSOFNODESOF, Element->NumSubFunction[1].data());
         break;
 
       case GROUPSOFEDGESONNODESOF:
@@ -158,7 +178,7 @@ void Get_DofOfElement(struct Element *Element,
         Get_GroupsOfEdgesOnNodesOfElement(Element, &StartingIndex);
         Get_CodesOfElement(FunctionSpace_P, QuantityStorage_P,
                            Element->NbrGroupsOfEntities,
-                           Element->NumGroupsOfEntities, StartingIndex,
+                           Element->NumGroupsOfEntities.data(), StartingIndex,
                            i_BFunction, GROUPSOFEDGESONNODESOF, NULL);
         break;
 
@@ -170,7 +190,7 @@ void Get_DofOfElement(struct Element *Element,
           Element->GeoElement->NumEdges, BasisFunction_P);
         Get_CodesOfElement(FunctionSpace_P, QuantityStorage_P,
                            Element->NbrGroupsOfEntities,
-                           Element->NumGroupsOfEntities, StartingIndex,
+                           Element->NumGroupsOfEntities.data(), StartingIndex,
                            i_BFunction, GROUPSOFEDGESOF, NULL);
         break;
 
@@ -182,7 +202,7 @@ void Get_DofOfElement(struct Element *Element,
           Element->GeoElement->NumFacets, BasisFunction_P);
         Get_CodesOfElement(FunctionSpace_P, QuantityStorage_P,
                            Element->NbrGroupsOfEntities,
-                           Element->NumGroupsOfEntities, StartingIndex,
+                           Element->NumGroupsOfEntities.data(), StartingIndex,
                            i_BFunction, GROUPSOFFACETSOF, NULL);
         break;
 
@@ -190,23 +210,23 @@ void Get_DofOfElement(struct Element *Element,
         Get_RegionForElement(Element, &StartingIndex, BasisFunction_P);
         Get_CodesOfElement(FunctionSpace_P, QuantityStorage_P,
                            Element->NbrGroupsOfEntities,
-                           Element->NumGroupsOfEntities, StartingIndex,
-                           i_BFunction, REGION, Element->NumSubFunction[1]);
+                           Element->NumGroupsOfEntities.data(), StartingIndex,
+                           i_BFunction, REGION, Element->NumSubFunction[1].data());
         break;
 
       case GROUPOFREGIONSOF:
         Get_GroupOfRegionsForElement(Element, &StartingIndex, BasisFunction_P);
         Get_CodesOfElement(
           FunctionSpace_P, QuantityStorage_P, Element->NbrGroupsOfEntities,
-          Element->NumGroupsOfEntities, StartingIndex, i_BFunction,
-          GROUPOFREGIONSOF, Element->NumSubFunction[1]);
+          Element->NumGroupsOfEntities.data(), StartingIndex, i_BFunction,
+          GROUPOFREGIONSOF, Element->NumSubFunction[1].data());
         break;
 
       case GLOBAL:
         Get_GlobalForElement(Element, &StartingIndex, BasisFunction_P);
         Get_CodesOfElement(FunctionSpace_P, QuantityStorage_P,
                            Element->NbrGroupsOfEntities,
-                           Element->NumGroupsOfEntities, StartingIndex,
+                           Element->NumGroupsOfEntities.data(), StartingIndex,
                            i_BFunction, GLOBAL, NULL);
         break;
       }
@@ -257,14 +277,11 @@ void Get_GroupsOfElementaryEntitiesOfElement(
 
       if(!BasisFunction_P->SubFunction) {
         if(j == Element->NbrGroupsOfEntities) {
+          Grow_GroupsOfEntities(Element, j + 1);
           Element->NumSubFunction[1][j] = 0;
           Element->NumSubFunction[0][j] = -1;
           Element->NumGroupsOfEntities[j] = Key_P->Int2;
           Element->NbrEntitiesInGroups[Element->NbrGroupsOfEntities++] = 0;
-          if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
-            Message::Error("Reached limit number of groups of entities");
-            return;
-          }
         }
         Element->NumEntitiesInGroups[j][Element->NbrEntitiesInGroups[j]++] =
           (Key_P->Int1 > 0) ? (i + 1) : -(i + 1);
@@ -273,6 +290,7 @@ void Get_GroupsOfElementaryEntitiesOfElement(
         Nbr_SubFunction = List_Nbr(BasisFunction_P->SubFunction);
 
         if(j == Element->NbrGroupsOfEntities) {
+          Grow_GroupsOfEntities(Element, j + Nbr_SubFunction);
           for(i_SF = 0; i_SF < Nbr_SubFunction; i_SF++) {
             Element->NumSubFunction[1][j + i_SF] = i_SF;
             Element->NumSubFunction[0][j + i_SF] =
@@ -282,10 +300,6 @@ void Get_GroupsOfElementaryEntitiesOfElement(
                 *((int *)List_Pointer(BasisFunction_P->SubdFunction, i_SF));
             Element->NumGroupsOfEntities[j + i_SF] = Key_P->Int2;
             Element->NbrEntitiesInGroups[Element->NbrGroupsOfEntities++] = 0;
-            if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
-              Message::Error("Reached limit number of groups of entities");
-              return;
-            }
           }
         }
         for(i_SF = 0; i_SF < Nbr_SubFunction; i_SF++)
@@ -329,11 +343,8 @@ void Get_GroupsOfEdgesOnNodesOfElement(struct Element *Element,
             (Element->NumGroupsOfEntities[j] != Num_Node))
         j++;
       if(j == Element->NbrGroupsOfEntities) {
+        Grow_GroupsOfEntities(Element, j + 1);
         Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] = Num_Node;
-        if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
-          Message::Error("Reached limit number of groups of entities");
-          return;
-        }
         Element->NbrEntitiesInGroups[j] = 0;
       }
       Element->NumEntitiesInGroups[j][Element->NbrEntitiesInGroups[j]++] =
@@ -349,11 +360,8 @@ void Get_GroupsOfEdgesOnNodesOfElement(struct Element *Element,
             (Element->NumGroupsOfEntities[j] != Num_Node))
         j++;
       if(j == Element->NbrGroupsOfEntities) {
+        Grow_GroupsOfEntities(Element, j + 1);
         Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] = Num_Node;
-        if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
-          Message::Error("Reached limit number of groups of entities");
-          return;
-        }
         Element->NbrEntitiesInGroups[j] = 0;
       }
       Element->NumEntitiesInGroups[j][Element->NbrEntitiesInGroups[j]++] =
@@ -379,17 +387,16 @@ void Get_RegionForElement(struct Element *Element, int *StartingIndex,
   *StartingIndex = Element->NbrGroupsOfEntities;
 
   if(!BasisFunction_P->SubFunction) {
+    Grow_GroupsOfEntities(Element, Element->NbrGroupsOfEntities + 1);
     Element->NumSubFunction[1][Element->NbrGroupsOfEntities] = 0;
     Element->NumSubFunction[0][Element->NbrGroupsOfEntities] = -1;
     Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] =
       Element->Region;
-    if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
-      Message::Error("Reached limit number of groups of entities");
-      return;
-    }
   }
   else { /* For SubFunctions (basis functions for a global function) */
     Nbr_SubFunction = List_Nbr(BasisFunction_P->SubFunction);
+    Grow_GroupsOfEntities(Element,
+                          Element->NbrGroupsOfEntities + Nbr_SubFunction);
 
     for(i_SF = 0; i_SF < Nbr_SubFunction; i_SF++) {
       Element->NumSubFunction[1][Element->NbrGroupsOfEntities] =
@@ -403,10 +410,6 @@ void Get_RegionForElement(struct Element *Element, int *StartingIndex,
                                 i_SF)); /* Index Expression */
       Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] =
         Element->Region;
-      if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
-        Message::Error("Reached limit number of groups of entities");
-        return;
-      }
     }
   }
 }
@@ -428,17 +431,16 @@ void Get_GroupOfRegionsForElement(struct Element *Element, int *StartingIndex,
   *StartingIndex = Element->NbrGroupsOfEntities;
 
   if(!BasisFunction_P->SubFunction) {
+    Grow_GroupsOfEntities(Element, Element->NbrGroupsOfEntities + 1);
     Element->NumSubFunction[1][Element->NbrGroupsOfEntities] = 0;
     Element->NumSubFunction[0][Element->NbrGroupsOfEntities] = -1;
     Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] =
       GroupEntity_P->Num;
-    if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
-      Message::Error("Reached limit number of groups of entities");
-      return;
-    }
   }
   else { /* For SubFunctions (basis functions for a global function) */
     Nbr_SubFunction = List_Nbr(BasisFunction_P->SubFunction);
+    Grow_GroupsOfEntities(Element,
+                          Element->NbrGroupsOfEntities + Nbr_SubFunction);
 
     for(i_SF = 0; i_SF < Nbr_SubFunction; i_SF++) {
       Element->NumSubFunction[1][Element->NbrGroupsOfEntities] =
@@ -452,10 +454,6 @@ void Get_GroupOfRegionsForElement(struct Element *Element, int *StartingIndex,
                                 i_SF)); /* Index Expression */
       Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] =
         GroupEntity_P->Num;
-      if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
-        Message::Error("Reached limit number of groups of entities");
-        return;
-      }
     }
   }
 }
@@ -479,6 +477,7 @@ void Get_GlobalForElement(struct Element *Element, int *StartingIndex,
   Nbr_Global = List_Nbr(GroupEntity_P->InitialList);
   Num_Global =
     (Nbr_Global) ? (int *)List_Pointer(GroupEntity_P->InitialList, 0) : NULL;
+  Grow_GroupsOfEntities(Element, Element->NbrGroupsOfEntities + Nbr_Global);
 
   if(BasisFunction_P->GlobalBasisFunction) {
     for(i = 0; i < Nbr_Global; i++) {
@@ -488,10 +487,6 @@ void Get_GlobalForElement(struct Element *Element, int *StartingIndex,
       /* Attention: correspondance i-i si liste triee ! fait dans yacc */
       Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] =
         Num_Global[i];
-      if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
-        Message::Error("Reached limit number of groups of entities");
-        return;
-      }
     }
 
     if(TreatmentStatus == STATUS_PRE)
@@ -502,10 +497,6 @@ void Get_GlobalForElement(struct Element *Element, int *StartingIndex,
     for(i = 0; i < Nbr_Global; i++) {
       Element->NumGroupsOfEntities[Element->NbrGroupsOfEntities++] =
         Num_Global[i];
-      if(Element->NbrGroupsOfEntities >= NBR_MAX_GROUPS_IN_ELEMENT - 1) {
-        Message::Error("Reached limit number of groups of entities");
-        return;
-      }
     }
   }
 }

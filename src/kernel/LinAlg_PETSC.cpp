@@ -226,10 +226,30 @@ void LinAlg_CreateMatrix(gMatrix *M, gSolver *Solver, int n, int m)
   for(int i = 0; i < nonloc; i++)
     nnz[Current.DofData->NonLocalEquations[i] - 1] = prealloc_full;
 
-  if(Message::GetCommSize() > 1) { // FIXME: alloc full lines...
+  if(Message::GetCommSize() > 1) {
 #if((PETSC_VERSION_MAJOR == 3) && (PETSC_VERSION_MINOR >= 3))
-    _try(MatCreateAIJ(MyComm, PETSC_DECIDE, PETSC_DECIDE, n, m, prealloc,
-                      PETSC_NULL, prealloc, PETSC_NULL, &M->M));
+    // Per-row preallocation of the locally owned rows, split between the
+    // diagonal (local columns) and off-diagonal (remote columns) blocks.
+    // Non-local equations get full lines, as in the sequential case:
+    // otherwise each such dense row triggers repeated reallocations of the
+    // whole local matrix during assembly. The local sizes reproduce what
+    // PETSC_DECIDE gives, so the matrix layout is unchanged.
+    PetscInt nrow = PETSC_DECIDE, ncol = PETSC_DECIDE, N = n, Mc = m;
+    _try(PetscSplitOwnership(MyComm, &nrow, &N));
+    _try(PetscSplitOwnership(MyComm, &ncol, &Mc));
+    PetscInt rend = 0;
+    MPI_Scan(&nrow, &rend, 1, MPIU_INT, MPI_SUM, MyComm);
+    PetscInt rstart = rend - nrow;
+    PetscInt dmax = ncol, omax = m - ncol;
+    std::vector<PetscInt> d_nnz(nrow), o_nnz(nrow);
+    for(PetscInt i = 0; i < nrow; i++) {
+      PetscInt nz = nnz[rstart + i];
+      d_nnz[i] = (nz < dmax) ? nz : dmax;
+      o_nnz[i] = (nz < omax) ? nz : omax;
+    }
+    _try(MatCreateAIJ(MyComm, PETSC_DECIDE, PETSC_DECIDE, n, m, 0,
+                      nrow ? &d_nnz[0] : PETSC_NULL, 0,
+                      nrow ? &o_nnz[0] : PETSC_NULL, &M->M));
 #else
     _try(MatCreateMPIAIJ(MyComm, PETSC_DECIDE, PETSC_DECIDE, n, m, prealloc,
                          PETSC_NULL, prealloc, PETSC_NULL, &M->M));

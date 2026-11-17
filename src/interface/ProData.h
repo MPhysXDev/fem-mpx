@@ -9,6 +9,7 @@
 #include <string>
 #include <map>
 #include <vector>
+#include <array>
 #include "GetDPConfig.h"
 #include "ListUtils.h"
 
@@ -1733,14 +1734,6 @@ struct CurrentData {
 #define NBR_MAX_ENTITIES_IN_ELEMENT 60
 #define NBR_MAX_SUBENTITIES_IN_ELEMENT 5
 
-// FIXME: this should be made dynamic (with std::vector in Element) ; setting a
-// static too large can easily lead to stack overflows
-#if defined(HAVE_SMALL_STACK)
-#define NBR_MAX_GROUPS_IN_ELEMENT 30
-#else
-#define NBR_MAX_GROUPS_IN_ELEMENT 200
-#endif
-
 struct IntxList {
   int Int;
   List_T *List;
@@ -1781,15 +1774,19 @@ struct Element {
   double DetJac;
   MATRIX3x3 InvJac;
 
+  // Groups of entities (one per basis function group, global function, ...).
+  // The arrays are dynamic (no limit on the number of groups); they are only
+  // grown (see Get_DofOfElement.cpp), never shrunk, so that once warmed up the
+  // per-element hot paths do not allocate. Only the first NbrGroupsOfEntities
+  // entries are meaningful.
   int NumLastElementForGroupsOfEntities;
   int NbrGroupsOfEntities;
-  int NumGroupsOfEntities[NBR_MAX_GROUPS_IN_ELEMENT];
-  int NbrEntitiesInGroups[NBR_MAX_GROUPS_IN_ELEMENT];
-  int NumEntitiesInGroups[NBR_MAX_GROUPS_IN_ELEMENT]
-                         [NBR_MAX_ENTITIES_IN_ELEMENT];
-  int NumSubFunction[3][NBR_MAX_GROUPS_IN_ELEMENT];
+  std::vector<int> NumGroupsOfEntities;
+  std::vector<int> NbrEntitiesInGroups;
+  std::vector<std::array<int, NBR_MAX_ENTITIES_IN_ELEMENT> > NumEntitiesInGroups;
+  std::vector<int> NumSubFunction[3];
 
-  struct GlobalBasisFunction *GlobalBasisFunction[NBR_MAX_GROUPS_IN_ELEMENT];
+  std::vector<struct GlobalBasisFunction *> GlobalBasisFunction;
 };
 
 /* Element.Type */

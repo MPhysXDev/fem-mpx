@@ -70,7 +70,7 @@ int Get_InitElementTrace(struct Element *Element, int InIndex)
   struct TwoInt *Pair_P;
 
   for(std::size_t i = 0; i < Element->ElementTraceCandidates.size(); i++) {
-    Free(Element->ElementTraceCandidates[i]);
+    delete Element->ElementTraceCandidates[i];
   }
   Element->ElementTraceCandidates.clear();
   Element->ElementTrace = nullptr;
@@ -84,7 +84,7 @@ int Get_InitElementTrace(struct Element *Element, int InIndex)
                                               &Element->Num, fcmp_int))) {
       Element->ElementTraceCandidates.resize(1);
       Element->ElementTraceCandidates[0] =
-        (struct Element *)Malloc(sizeof(struct Element));
+        new struct Element; // has std::vector members: no Malloc
       Element->ElementTraceCandidates[0]->GeoElement =
         Geo_GetGeoElement(Pair_P->Int2);
     }
@@ -113,7 +113,7 @@ int Get_InitElementTrace(struct Element *Element, int InIndex)
       Element->ElementTraceCandidates.resize(matches.size());
       for(int i = 0; i < matches.size(); i++) {
         Element->ElementTraceCandidates[i] =
-          (struct Element *)Malloc(sizeof(struct Element));
+          new struct Element; // has std::vector members: no Malloc
         Element->ElementTraceCandidates[i]->GeoElement = matches[i];
       }
     }
